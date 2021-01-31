@@ -1,0 +1,5 @@
+# executables
+cmd/svg2pdf/svg2pdf
+
+# test files
+cmd/**/*.pdf
