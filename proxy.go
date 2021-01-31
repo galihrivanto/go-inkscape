@@ -22,7 +22,8 @@ const (
 
 // defines common errors in library
 var (
-	ErrCommandNotReady = errors.New("inkscape not available")
+	ErrCommandNotAvailable = errors.New("inkscape not available")
+	ErrCommandNotReady     = errors.New("inkscape not ready")
 )
 
 var (
@@ -86,7 +87,7 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 func (p *Proxy) Run(args ...string) error {
 	commandPath, err := exec.LookPath(p.options.commandName)
 	if err != nil {
-		return err
+		return ErrCommandNotAvailable
 	}
 
 	log.Println("proxy:", commandPath)
@@ -142,7 +143,7 @@ func (p *Proxy) waitReady(timeout time.Duration) error {
 
 func (p *Proxy) sendCommand(b []byte) ([]byte, error) {
 	log.Println("proxy: wait ready")
-	err := p.waitReady(5 * time.Second)
+	err := p.waitReady(30 * time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +211,7 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 		"file-open:"+svgIn,
 		"export-filename:"+pdfOut,
 		"export-do",
+		"file-close:",
 	)
 	if err != nil {
 		return err
