@@ -30,11 +30,6 @@ var (
 	verbose    bool
 )
 
-// SetVerbose override verbosity
-func SetVerbose(v bool) {
-	verbose = v
-}
-
 type chanWriter struct {
 	out chan []byte
 }

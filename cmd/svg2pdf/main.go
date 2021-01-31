@@ -21,8 +21,6 @@ func handleErr(err error) {
 }
 
 func main() {
-	inkscape.SetVerbose(true)
-
 	flag.StringVar(&svgInput, "input", "", "svg input")
 	flag.StringVar(&pdfOutput, "output", "result.pdf", "pdf output")
 	flag.Parse()
@@ -32,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxy := inkscape.NewProxy()
+	proxy := inkscape.NewProxy(inkscape.Verbose(true))
 	err := proxy.Run()
 	handleErr(err)
 	defer proxy.Close()
