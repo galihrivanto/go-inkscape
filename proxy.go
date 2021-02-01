@@ -31,6 +31,15 @@ var (
 	verbose    bool
 )
 
+func debug(v ...interface{}) {
+	if !verbose {
+		return
+	}
+
+	log.Print("proxy:")
+	log.Println(v...)
+}
+
 type chanWriter struct {
 	out chan []byte
 }
@@ -79,7 +88,13 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 	}
 	p.stdin = stdin
 
-	log.Println("proxy: run in background")
+	defer func() {
+		// only close channel when command closes
+		close(p.stdout)
+		close(p.stderr)
+	}()
+
+	debug("run in background")
 	return cmd.Run()
 }
 
@@ -90,7 +105,7 @@ func (p *Proxy) Run(args ...string) error {
 		return ErrCommandNotAvailable
 	}
 
-	log.Println("proxy:", commandPath)
+	debug(commandPath)
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 
@@ -111,8 +126,6 @@ func (p *Proxy) Run(args ...string) error {
 func (p *Proxy) Close() error {
 	p.cancel()
 	p.stdin.Close()
-	close(p.stdout)
-	close(p.stderr)
 
 	return nil
 }
@@ -142,13 +155,13 @@ func (p *Proxy) waitReady(timeout time.Duration) error {
 }
 
 func (p *Proxy) sendCommand(b []byte) ([]byte, error) {
-	log.Println("proxy: wait ready")
+	debug("wait ready")
 	err := p.waitReady(30 * time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Println("proxy: send command to stdin", string(b))
+	debug("send command to stdin", string(b))
 
 	// append new line
 	if !bytes.HasSuffix(b, []byte{'\n'}) {
@@ -170,20 +183,20 @@ waitLoop:
 			// for now, we can only check error message pattern
 			// ignore WARNING
 			if bytes.Contains(output, []byte("WARNING")) {
-				log.Println(string(bytesErr))
+				debug(string(bytesErr))
 				break
 			}
 
 			err = fmt.Errorf("%s", string(bytesErr))
 			break waitLoop
 		case output = <-p.stdout:
-			log.Println(string(output))
 			if len(output) == 0 {
 				break
 			}
 
 			// check if shell mode banner
 			if bytes.Contains(output, []byte(shellModeBanner)) {
+				debug(string(output))
 				break
 			}
 
@@ -217,7 +230,7 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 		return err
 	}
 
-	log.Println("proxy: result", string(res))
+	debug("result", string(res))
 
 	return nil
 }
