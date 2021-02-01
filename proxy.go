@@ -221,10 +221,10 @@ func (p *Proxy) RawCommands(args ...string) ([]byte, error) {
 // Svg2Pdf convert svg input file to output pdf file
 func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 	res, err := p.RawCommands(
-		"file-open:"+svgIn,
-		"export-filename:"+pdfOut,
-		"export-do",
-		"file-close:",
+		FileOpen(svgIn),
+		ExportFileName(pdfOut),
+		ExportDo(),
+		FileClose(),
 	)
 	if err != nil {
 		return err
