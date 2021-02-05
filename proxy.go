@@ -10,6 +10,7 @@ import (
 	"log"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/galihrivanto/runner"
@@ -62,8 +63,11 @@ type Proxy struct {
 
 	cmd *exec.Cmd
 
-	// input and output
-	stdin  io.WriteCloser
+	// input
+	lock  sync.RWMutex
+	stdin io.WriteCloser
+
+	// output
 	stdout chan []byte
 	stderr chan []byte
 }
@@ -86,7 +90,10 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 	if err != nil {
 		return err
 	}
+
+	p.lock.Lock()
 	p.stdin = stdin
+	p.lock.Unlock()
 
 	defer func() {
 		// only close channel when command closes
@@ -94,8 +101,13 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 		close(p.stderr)
 	}()
 
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
 	debug("run in background")
-	return cmd.Run()
+
+	return cmd.Wait()
 }
 
 // Run start inkscape proxy
@@ -137,10 +149,13 @@ func (p *Proxy) waitReady(timeout time.Duration) error {
 	go func() {
 		for {
 			// query stdin availability every second
+			p.lock.RLock()
 			if p.stdin != nil {
+				p.lock.RUnlock()
 				close(ready)
 				return
 			}
+			p.lock.RUnlock()
 
 			<-time.After(time.Second)
 		}
