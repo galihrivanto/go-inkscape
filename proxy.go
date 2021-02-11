@@ -46,6 +46,11 @@ type chanWriter struct {
 }
 
 func (w *chanWriter) Write(data []byte) (int, error) {
+
+	// look like the buffer being reused internally by the exec.Command
+	// so we can directly read the buffer in another goroutine while still being used in exec.Command goroutine
+
+	// copy to be written buffer and pass it into channel
 	bufferToWrite := append([]byte{}, data...)
 	w.out <- bufferToWrite
 
