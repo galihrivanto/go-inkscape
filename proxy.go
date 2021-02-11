@@ -46,9 +46,10 @@ type chanWriter struct {
 }
 
 func (w *chanWriter) Write(data []byte) (int, error) {
-	w.out <- data
+	bufferToWrite := append([]byte{}, data...)
+	w.out <- bufferToWrite
 
-	return len(data), nil
+	return len(bufferToWrite), nil
 }
 
 // Proxy runs inkspace instance in background and
