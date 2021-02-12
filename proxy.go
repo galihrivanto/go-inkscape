@@ -1,7 +1,6 @@
 package inkscape
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -82,27 +81,17 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 
 	cmd := exec.CommandContext(ctx, commandPath, args...)
 
-	// // pipe stderr
-	// stderrC := make(chan []byte)
-	// defer close(stderrC)
+	// pipe stderr
+	stderrC := make(chan []byte)
+	defer close(stderrC)
 
-	// cmd.Stderr = &chanWriter{out: stderrC}
+	cmd.Stderr = &chanWriter{out: stderrC}
 
 	// pipe stdout
 	stdoutC := make(chan []byte)
 	defer close(stdoutC)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-
-	stdoutReader := bufio.NewReader(stdout)
-	go func() {
-		for {
-
-		}
-	}()
+	cmd.Stdout = &chanWriter{out: stdoutC}
 
 	// pipe stdin
 	stdin, err := cmd.StdinPipe()
@@ -118,6 +107,15 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 	}
 
 	// make first command available
+	// after received prompt
+	for {
+		bytesOut := <-stdoutC
+		bytesOut = bytes.TrimSpace(bytesOut)
+		if isPrompt(bytesOut[len(bytesOut)-1:]) {
+			break
+		}
+	}
+
 	select {
 	case p.requestLimiter <- struct{}{}:
 	default:
@@ -136,30 +134,23 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 				p.stderr <- []byte(err.Error())
 			}
 
-		// case byteErr := <-stderrC:
-		// 	if len(byteErr) == 0 {
-		// 		break
-		// 	}
-
-		// 	if bytes.Contains(byteErr, []byte("WARNING")) {
-		// 		continue
-		// 	}
-
-		// 	p.stderr <- byteErr
-
-		case byteOut := <-stdoutC:
-			if len(byteOut) == 0 {
-				debug("new line, why?")
+		case bytesErr := <-stderrC:
+			if len(bytesErr) == 0 {
 				break
 			}
 
-			// check if shell mode banner
-			if bytes.Contains(byteOut, []byte(shellModeBanner)) {
-				debug(string(byteOut))
+			if bytes.Contains(bytesErr, []byte("WARNING")) {
 				break
 			}
 
-			p.stdout <- byteOut
+			p.stderr <- bytes.TrimSpace(bytesErr)
+
+		case bytesOut := <-stdoutC:
+			if len(bytesOut) == 0 {
+				break
+			}
+
+			p.stdout <- bytes.TrimSpace(bytesOut)
 		}
 	}
 }
@@ -185,13 +176,17 @@ func (p *Proxy) Run(args ...string) error {
 		)
 	}()
 
-	return nil
+	// print inkscape version
+	res, err := p.RawCommands(Version())
+	fmt.Println(string(res))
+
+	return err
 }
 
 // Close satisfy io.Closer interface
 func (p *Proxy) Close() error {
 	// send quit command
-	_, err := p.RawCommands(quitCommand)
+	_, err := p.sendCommand([]byte(quitCommand), false)
 
 	p.cancel()
 	close(p.requestLimiter)
@@ -202,8 +197,21 @@ func (p *Proxy) Close() error {
 	return err
 }
 
-func (p *Proxy) sendCommand(b []byte) ([]byte, error) {
-	debug("send command to stdin", string(b))
+func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
+	wait := true
+	if len(waitPrompt) > 0 {
+		wait = waitPrompt[0]
+	}
+
+	// wait available
+	debug("wait prompt available")
+	<-p.requestLimiter
+	defer func() {
+		// make it available again
+		p.requestLimiter <- struct{}{}
+	}()
+
+	debug("send command to stdin ", string(b))
 
 	// drain old err and out
 	drain(p.stderr)
@@ -221,20 +229,26 @@ func (p *Proxy) sendCommand(b []byte) ([]byte, error) {
 		err    error
 	)
 
+	// immediate return
+	if !wait {
+		<-time.After(time.Second)
+		return []byte{}, nil
+	}
+
 waitLoop:
 	for {
 		select {
 		case bytesErr := <-p.stderr:
-
+			debug(string(bytesErr))
 			err = fmt.Errorf("%s", string(bytesErr))
 			break waitLoop
 		case bytesOut := <-p.stdout:
-			fmt.Println(string(bytesOut))
+			debug(string(bytesOut))
+			if isPrompt(bytesOut) {
+				break waitLoop
+			}
 
-			// TODO: use sentinel
-			output = bytesOut
-
-			break waitLoop
+			output = append(output, bytesOut...)
 		}
 	}
 
@@ -246,17 +260,10 @@ func (p *Proxy) RawCommands(args ...string) ([]byte, error) {
 	buffer := bufferPool.Get()
 	defer bufferPool.Put(buffer)
 
-	// wait available
-	debug("wait available")
-	<-p.requestLimiter
-
 	// construct command buffer
 	buffer.WriteString(strings.Join(args, ";"))
 
 	res, err := p.sendCommand(buffer.Bytes())
-
-	// make it available again
-	p.requestLimiter <- struct{}{}
 
 	return res, err
 }
@@ -274,8 +281,6 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 	}
 
 	debug("result", string(res))
-
-	<-time.After(30 * time.Second)
 
 	return nil
 }
@@ -304,6 +309,10 @@ func NewProxy(opts ...Option) *Proxy {
 		requestLimiter: make(chan struct{}, 1),
 		requestQueue:   make(chan []byte, 100),
 	}
+}
+
+func isPrompt(data []byte) bool {
+	return bytes.Equal(data, []byte(">"))
 }
 
 func drain(c chan []byte) {
