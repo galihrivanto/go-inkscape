@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/galihrivanto/go-inkscape"
@@ -11,6 +12,7 @@ import (
 var (
 	svgInput  string
 	pdfOutput string
+	verbose   bool
 )
 
 func handleErr(err error) {
@@ -23,6 +25,7 @@ func handleErr(err error) {
 func main() {
 	flag.StringVar(&svgInput, "input", "", "svg input")
 	flag.StringVar(&pdfOutput, "output", "result.pdf", "pdf output")
+	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.Parse()
 
 	if svgInput == "" {
@@ -30,7 +33,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxy := inkscape.NewProxy(inkscape.Verbose(true))
+	proxy := inkscape.NewProxy(inkscape.Verbose(verbose))
+
+	log.Println("run command")
+
 	err := proxy.Run()
 	handleErr(err)
 	defer proxy.Close()
