@@ -115,11 +115,15 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 
 	// make first command available
 	// after received prompt
+wait:
 	for {
 		bytesOut := <-stdoutC
 		bytesOut = bytes.TrimSpace(bytesOut)
-		if isPrompt(bytesOut[len(bytesOut)-1:]) {
-			break
+		parts := bytes.Split(bytesOut, []byte("\n"))
+		for _, part := range parts {
+			if isPrompt(part) {
+				break wait
+			}
 		}
 	}
 
@@ -184,10 +188,10 @@ func (p *Proxy) Run(args ...string) error {
 	}()
 
 	// print inkscape version
-	res, err := p.RawCommands(Version())
+	res, _ := p.RawCommands(Version())
 	fmt.Println(string(res))
 
-	return err
+	return nil
 }
 
 // Close satisfy io.Closer interface
@@ -251,8 +255,11 @@ waitLoop:
 			break waitLoop
 		case bytesOut := <-p.stdout:
 			debug(string(bytesOut))
-			if isPrompt(bytesOut) {
-				break waitLoop
+			parts := bytes.Split(bytesOut, []byte("\n"))
+			for _, part := range parts {
+				if isPrompt(part) {
+					break waitLoop
+				}
 			}
 
 			output = append(output, bytesOut...)

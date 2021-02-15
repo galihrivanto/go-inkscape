@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/galihrivanto/go-inkscape"
@@ -34,8 +33,6 @@ func main() {
 	}
 
 	proxy := inkscape.NewProxy(inkscape.Verbose(verbose))
-
-	log.Println("run command")
 
 	err := proxy.Run()
 	handleErr(err)
