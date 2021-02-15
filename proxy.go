@@ -51,10 +51,11 @@ func (w *chanWriter) Write(data []byte) (int, error) {
 	// so we can directly read the buffer in another goroutine while still being used in exec.Command goroutine
 
 	// copy to be written buffer and pass it into channel
-	bufferToWrite := append([]byte{}, data...)
+	bufferToWrite := make([]byte, len(data))
+	written := copy(bufferToWrite, data)
 	w.out <- bufferToWrite
 
-	return len(bufferToWrite), nil
+	return written, nil
 }
 
 // Proxy runs inkspace instance in background and
