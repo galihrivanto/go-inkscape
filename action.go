@@ -110,7 +110,7 @@ func FileOpen(filePath string) string {
 
 // FileClose .
 func FileClose() string {
-	return "file-close:"
+	return "file-close"
 }
 
 // SelectAll .
@@ -144,15 +144,15 @@ func SelectClear() string {
 }
 
 // InvertOption define option when invert selection
-type InvertOption string 
+type InvertOption string
 
 // invert selection option
 const (
-	InvertOptionAll InvertOption = "all"
-	InvertOptionLayers = "layers"
-	InvertOptionNoLayers = "no-layers"
-	InvertOptionGroup = "group"
-	InvertOptionNoGroup = "no-group"
+	InvertOptionAll      InvertOption = "all"
+	InvertOptionLayers                = "layers"
+	InvertOptionNoLayers              = "no-layers"
+	InvertOptionGroup                 = "group"
+	InvertOptionNoGroup               = "no-group"
 )
 
 // SelectInvert .
@@ -163,4 +163,9 @@ func SelectInvert(option InvertOption) string {
 // SelectList .
 func SelectList() string {
 	return "select-list"
+}
+
+// Version print inksscape version and return
+func Version() string {
+	return "inkscape-version"
 }

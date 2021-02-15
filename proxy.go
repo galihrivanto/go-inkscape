@@ -5,12 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/galihrivanto/runner"
@@ -19,6 +16,7 @@ import (
 const (
 	defaultCmdName  = "inkscape"
 	shellModeBanner = "Inkscape interactive shell mode"
+	quitCommand     = "quit"
 )
 
 // defines common errors in library
@@ -37,8 +35,7 @@ func debug(v ...interface{}) {
 		return
 	}
 
-	log.Print("proxy:")
-	log.Println(v...)
+	log.Print(append([]interface{}{"proxy:"}, v...)...)
 }
 
 type chanWriter struct {
@@ -68,11 +65,11 @@ type Proxy struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	cmd *exec.Cmd
+	// limiter to allow one command processed at time
+	requestLimiter chan struct{}
 
-	// input
-	lock  sync.RWMutex
-	stdin io.WriteCloser
+	// queue of request
+	requestQueue chan []byte
 
 	// output
 	stdout chan []byte
@@ -90,31 +87,83 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 	}
 
 	cmd := exec.CommandContext(ctx, commandPath, args...)
-	cmd.Stdout = &chanWriter{p.stdout}
-	cmd.Stderr = &chanWriter{p.stderr}
 
+	// pipe stderr
+	stderrC := make(chan []byte)
+	defer close(stderrC)
+
+	cmd.Stderr = &chanWriter{out: stderrC}
+
+	// pipe stdout
+	stdoutC := make(chan []byte)
+	defer close(stdoutC)
+
+	cmd.Stdout = &chanWriter{out: stdoutC}
+
+	// pipe stdin
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
 	}
+	defer stdin.Close()
 
-	p.lock.Lock()
-	p.stdin = stdin
-	p.lock.Unlock()
-
-	defer func() {
-		// only close channel when command closes
-		close(p.stdout)
-		close(p.stderr)
-	}()
-
+	// start command and wait it close
+	debug("run in background")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
-	debug("run in background")
+	// make first command available
+	// after received prompt
+wait:
+	for {
+		bytesOut := <-stdoutC
+		bytesOut = bytes.TrimSpace(bytesOut)
+		parts := bytes.Split(bytesOut, []byte("\n"))
+		for _, part := range parts {
+			if isPrompt(part) {
+				break wait
+			}
+		}
+	}
 
-	return cmd.Wait()
+	select {
+	case p.requestLimiter <- struct{}{}:
+	default:
+		// discard
+	}
+
+	// handle command and output
+	for {
+		select {
+		case <-ctx.Done():
+			return cmd.Wait()
+
+		case command := <-p.requestQueue:
+			debug("write command ", string(command))
+			if _, err := stdin.Write(command); err != nil {
+				p.stderr <- []byte(err.Error())
+			}
+
+		case bytesErr := <-stderrC:
+			if len(bytesErr) == 0 {
+				break
+			}
+
+			if bytes.Contains(bytesErr, []byte("WARNING")) {
+				break
+			}
+
+			p.stderr <- bytes.TrimSpace(bytesErr)
+
+		case bytesOut := <-stdoutC:
+			if len(bytesOut) == 0 {
+				break
+			}
+
+			p.stdout <- bytes.TrimSpace(bytesOut)
+		}
+	}
 }
 
 // Run start inkscape proxy
@@ -138,95 +187,86 @@ func (p *Proxy) Run(args ...string) error {
 		)
 	}()
 
+	// print inkscape version
+	res, _ := p.RawCommands(Version())
+	fmt.Println(string(res))
+
 	return nil
 }
 
 // Close satisfy io.Closer interface
 func (p *Proxy) Close() error {
-	p.cancel()
-	p.stdin.Close()
+	// send quit command
+	_, err := p.sendCommand([]byte(quitCommand), false)
 
-	return nil
+	p.cancel()
+	close(p.requestLimiter)
+	close(p.requestQueue)
+	close(p.stderr)
+	close(p.stdout)
+
+	return err
 }
 
-// waitReady wait until background process
-// ready accepting command
-func (p *Proxy) waitReady(timeout time.Duration) error {
-	ready := make(chan struct{})
-	go func() {
-		for {
-			// query stdin availability every second
-			p.lock.RLock()
-			if p.stdin != nil {
-				p.lock.RUnlock()
-				close(ready)
-				return
-			}
-			p.lock.RUnlock()
+func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
+	wait := true
+	if len(waitPrompt) > 0 {
+		wait = waitPrompt[0]
+	}
 
-			<-time.After(time.Second)
-		}
+	// wait available
+	debug("wait prompt available")
+	<-p.requestLimiter
+	defer func() {
+		// make it available again
+		p.requestLimiter <- struct{}{}
 	}()
 
-	select {
-	case <-time.After(timeout):
-		return ErrCommandNotReady
-	case <-ready:
-		return nil
-	}
-}
+	debug("send command to stdin ", string(b))
 
-func (p *Proxy) sendCommand(b []byte) ([]byte, error) {
-	debug("wait ready")
-	err := p.waitReady(30 * time.Second)
-	if err != nil {
-		return nil, err
-	}
-
-	debug("send command to stdin", string(b))
+	// drain old err and out
+	drain(p.stderr)
+	drain(p.stdout)
 
 	// append new line
 	if !bytes.HasSuffix(b, []byte{'\n'}) {
 		b = append(b, '\n')
 	}
 
-	_, err = p.stdin.Write(b)
-	if err != nil {
-		return nil, err
-	}
+	p.requestQueue <- b
 
-	// wait output
-	var output []byte
+	var (
+		output []byte
+		err    error
+	)
+
+	// immediate return
+	if !wait {
+		<-time.After(time.Second)
+		return []byte{}, nil
+	}
 
 waitLoop:
 	for {
 		select {
 		case bytesErr := <-p.stderr:
-			// for now, we can only check error message pattern
-			// ignore WARNING
-			if bytes.Contains(output, []byte("WARNING")) {
-				debug(string(bytesErr))
-				break
-			}
-
+			debug(string(bytesErr))
 			err = fmt.Errorf("%s", string(bytesErr))
 			break waitLoop
-		case output = <-p.stdout:
-			if len(output) == 0 {
-				break
+		case bytesOut := <-p.stdout:
+			debug(string(bytesOut))
+			parts := bytes.Split(bytesOut, []byte("\n"))
+			for _, part := range parts {
+				if isPrompt(part) {
+					break waitLoop
+				}
 			}
 
-			// check if shell mode banner
-			if bytes.Contains(output, []byte(shellModeBanner)) {
-				debug(string(output))
-				break
-			}
-
-			break waitLoop
+			output = append(output, bytesOut...)
 		}
 	}
 
-	return output, nil
+	return output, err
 }
 
 // RawCommands send inkscape shell commands
@@ -237,7 +277,9 @@ func (p *Proxy) RawCommands(args ...string) ([]byte, error) {
 	// construct command buffer
 	buffer.WriteString(strings.Join(args, ";"))
 
-	return p.sendCommand(buffer.Bytes())
+	res, err := p.sendCommand(buffer.Bytes())
+
+	return res, err
 }
 
 // Svg2Pdf convert svg input file to output pdf file
@@ -260,26 +302,39 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 // NewProxy create new inkscape proxy instance
 func NewProxy(opts ...Option) *Proxy {
 	// default value
-	init := Options{
+	options := Options{
 		commandName: defaultCmdName,
 		maxRetry:    5,
 		verbose:     false,
 	}
 
 	// merge options
-	options := mergeOptions(init, opts...)
+	options = mergeOptions(options, opts...)
 
 	// check verbosity
-	if !options.verbose {
-		log.SetOutput(ioutil.Discard)
-	}
-
-	stdout := make(chan []byte)
-	stderr := make(chan []byte)
+	verbose = options.verbose
 
 	return &Proxy{
 		options: options,
-		stdout:  stdout,
-		stderr:  stderr,
+		stdout:  make(chan []byte, 100),
+		stderr:  make(chan []byte, 100),
+
+		// limit request to one request at time
+		requestLimiter: make(chan struct{}, 1),
+		requestQueue:   make(chan []byte, 100),
+	}
+}
+
+func isPrompt(data []byte) bool {
+	return bytes.Equal(data, []byte(">"))
+}
+
+func drain(c chan []byte) {
+	for {
+		select {
+		case <-c:
+		default:
+			return
+		}
 	}
 }

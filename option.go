@@ -13,6 +13,9 @@ type Options struct {
 	// maximum retry attempt
 	maxRetry int
 
+	// maximum command queue size
+	commandQueueLength int
+
 	// set verbosity
 	verbose bool
 }
@@ -30,6 +33,13 @@ func CommandName(commandName string) Option {
 func MaxRetry(retry int) Option {
 	return func(o *Options) {
 		o.maxRetry = retry
+	}
+}
+
+// CommandQueueLength override maximum command queue size
+func CommandQueueLength(length int) Option {
+	return func(o *Options) {
+		o.commandQueueLength = length
 	}
 }
 
