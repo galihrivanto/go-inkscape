@@ -43,9 +43,16 @@ type chanWriter struct {
 }
 
 func (w *chanWriter) Write(data []byte) (int, error) {
-	w.out <- data
 
-	return len(data), nil
+	// look like the buffer being reused internally by the exec.Command
+	// so we can directly read the buffer in another goroutine while still being used in exec.Command goroutine
+
+	// copy to be written buffer and pass it into channel
+	bufferToWrite := make([]byte, len(data))
+	written := copy(bufferToWrite, data)
+	w.out <- bufferToWrite
+
+	return written, nil
 }
 
 // Proxy runs inkspace instance in background and
