@@ -248,21 +248,30 @@ func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
 
 waitLoop:
 	for {
+		// wait until received prompt
+		bytesOut := <-p.stdout
+		debug(string(bytesOut))
+		parts := bytes.Split(bytesOut, []byte("\n"))
+		for _, part := range parts {
+			if isPrompt(part) {
+				break waitLoop
+			}
+		}
+
+		output = append(output, bytesOut...)
+	}
+
+	// drain error channel
+errLoop:
+	for {
 		select {
 		case bytesErr := <-p.stderr:
-			debug(string(bytesErr))
-			err = fmt.Errorf("%s", string(bytesErr))
-			break waitLoop
-		case bytesOut := <-p.stdout:
-			debug(string(bytesOut))
-			parts := bytes.Split(bytesOut, []byte("\n"))
-			for _, part := range parts {
-				if isPrompt(part) {
-					break waitLoop
-				}
+			if len(bytesErr) > 0 {
+				debug(string(bytesErr))
+				err = fmt.Errorf("%s", string(bytesErr))
 			}
-
-			output = append(output, bytesOut...)
+		default:
+			break errLoop
 		}
 	}
 
