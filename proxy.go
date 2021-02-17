@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -25,18 +26,8 @@ var (
 	ErrCommandNotReady     = errors.New("inkscape not ready")
 )
 
-var (
-	bufferPool = NewSizedBufferPool(5, 1024*1024)
-	verbose    bool
-)
-
-func debug(v ...interface{}) {
-	if !verbose {
-		return
-	}
-
-	log.Print(append([]interface{}{"proxy:"}, v...)...)
-}
+// bytes.Buffer pool
+var bufferPool = NewSizedBufferPool(5, 1024*1024)
 
 type chanWriter struct {
 	out chan []byte
@@ -60,6 +51,7 @@ func (w *chanWriter) Write(data []byte) (int, error) {
 // instance via stdin
 type Proxy struct {
 	options Options
+	logger  *log.Logger
 
 	// context and cancellation
 	ctx    context.Context
@@ -74,6 +66,12 @@ type Proxy struct {
 	// output
 	stdout chan []byte
 	stderr chan []byte
+}
+
+func (p *Proxy) debug(args ...interface{}) {
+	if p.options.verbose {
+		p.logger.Println(args...)
+	}
 }
 
 // runBackground run inkscape instance in background
@@ -108,7 +106,7 @@ func (p *Proxy) runBackground(ctx context.Context, commandPath string, vars ...s
 	defer stdin.Close()
 
 	// start command and wait it close
-	debug("run in background")
+	p.debug("run in background")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -140,7 +138,7 @@ wait:
 			return cmd.Wait()
 
 		case command := <-p.requestQueue:
-			debug("write command ", string(command))
+			p.debug("write command ", string(command))
 			if _, err := stdin.Write(command); err != nil {
 				p.stderr <- []byte(err.Error())
 			}
@@ -173,7 +171,7 @@ func (p *Proxy) Run(args ...string) error {
 		return ErrCommandNotAvailable
 	}
 
-	debug(commandPath)
+	p.debug(commandPath)
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 
@@ -215,14 +213,14 @@ func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
 	}
 
 	// wait available
-	debug("wait prompt available")
+	p.debug("wait prompt available")
 	<-p.requestLimiter
 	defer func() {
 		// make it available again
 		p.requestLimiter <- struct{}{}
 	}()
 
-	debug("send command to stdin ", string(b))
+	p.debug("send command to stdin ", string(b))
 
 	// drain old err and out
 	drain(p.stderr)
@@ -250,7 +248,7 @@ waitLoop:
 	for {
 		// wait until received prompt
 		bytesOut := <-p.stdout
-		debug(string(bytesOut))
+		p.debug(string(bytesOut))
 		parts := bytes.Split(bytesOut, []byte("\n"))
 		for _, part := range parts {
 			if isPrompt(part) {
@@ -267,7 +265,7 @@ errLoop:
 		select {
 		case bytesErr := <-p.stderr:
 			if len(bytesErr) > 0 {
-				debug(string(bytesErr))
+				p.debug(string(bytesErr))
 				err = fmt.Errorf("%s", string(bytesErr))
 			}
 		default:
@@ -303,7 +301,7 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 		return err
 	}
 
-	debug("result", string(res))
+	p.debug("result", string(res))
 
 	return nil
 }
@@ -320,13 +318,11 @@ func NewProxy(opts ...Option) *Proxy {
 	// merge options
 	options = mergeOptions(options, opts...)
 
-	// check verbosity
-	verbose = options.verbose
-
 	return &Proxy{
 		options: options,
 		stdout:  make(chan []byte, 100),
 		stderr:  make(chan []byte, 100),
+		logger:  log.New(os.Stdout, "[debug]", log.Lshortfile),
 
 		// limit request to one request at time
 		requestLimiter: make(chan struct{}, 1),
