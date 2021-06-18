@@ -332,9 +332,10 @@ func (p *Proxy) Svg2PdfContext(ctx context.Context, svgIn, pdfOut string) error 
 func NewProxy(opts ...Option) *Proxy {
 	// default value
 	options := Options{
-		commandName: defaultCmdName,
-		maxRetry:    5,
-		verbose:     false,
+		commandName:     defaultCmdName,
+		maxRetry:        5,
+		verbose:         false,
+		suppressWarning: true,
 	}
 
 	// merge options
