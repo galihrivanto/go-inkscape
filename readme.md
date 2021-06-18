@@ -15,9 +15,18 @@ go get github.com/galihrivanto/go-inkscape
 ```
 
 # **simple usage**
+
 ```go
-func main() {
-	var (
+package main
+
+import (
+	"flag"
+	"fmt"
+	"github.com/galihrivanto/go-inkscape"
+	"os"
+)
+
+var (
 	svgInput  string
 	pdfOutput string
 )
@@ -48,7 +57,6 @@ func main() {
 	handleErr(err)
 
 	fmt.Println("done!!")
-}
 }
 ```
 
