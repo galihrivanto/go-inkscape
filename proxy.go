@@ -145,7 +145,6 @@ wait:
 			}
 
 		case bytesErr := <-stderrC:
-			log.Println("stderr :", bytesErr)
 			if len(bytesErr) == 0 {
 				break
 			}
@@ -160,7 +159,6 @@ wait:
 			p.stderr <- bytes.TrimSpace(bytesErr)
 
 		case bytesOut := <-stdoutC:
-			log.Println("stderr :", bytesOut)
 			if len(bytesOut) == 0 {
 				break
 			}
