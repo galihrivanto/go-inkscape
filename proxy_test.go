@@ -1,11 +1,15 @@
 package inkscape
 
 import (
+	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 )
 
+// TestConcurrent tests the library usage in concurrent environment
 func TestConcurrent(t *testing.T) {
 	tempFiles := make([]string, 0)
 	defer func() {
@@ -32,6 +36,45 @@ func TestConcurrent(t *testing.T) {
 			}
 		}()
 	}
+}
+
+// TestExecContext tests against command execution within context boundary
+func TestExecContext(t *testing.T) {
+	const file = "circle.svg"
+	n := rand.Intn(1000)
+	tmpFile := fmt.Sprintf("%s.tmp.%d.pdf", file, n)
+	defer func() {
+		os.Remove(tmpFile)
+	}()
+
+	proxy := NewProxy(Verbose(true))
+	err := proxy.Run()
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	}
+	defer proxy.Close()
+
+	// gives very short life of execution context to tests
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1)
+	done := make(chan struct{})
+	defer cancel()
+
+	go func() {
+		// this command expected to run no more than specified timeout duration
+		err := proxy.Svg2PdfContext(ctx, file, tmpFile)
+		if err != nil {
+			if err != ErrCommandExecCanceled {
+				t.Error(err)
+			}
+		}
+		if err == nil {
+			t.Error("expected command to be canceled, got success command execution")
+		}
+		done <- struct{}{}
+	}()
+
+	<-done
 }
 
 func TestOpenFail(t *testing.T) {

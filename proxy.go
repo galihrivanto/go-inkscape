@@ -24,6 +24,7 @@ const (
 var (
 	ErrCommandNotAvailable = errors.New("inkscape not available")
 	ErrCommandNotReady     = errors.New("inkscape not ready")
+	ErrCommandExecCanceled = errors.New("command execution canceled")
 )
 
 // bytes.Buffer pool
@@ -36,7 +37,7 @@ type chanWriter struct {
 func (w *chanWriter) Write(data []byte) (int, error) {
 
 	// look like the buffer being reused internally by the exec.Command
-	// so we can directly read the buffer in another goroutine while still being used in exec.Command goroutine
+	// so we can't directly read the buffer in another goroutine while still being used in exec.Command goroutine
 
 	// copy to be written buffer and pass it into channel
 	bufferToWrite := make([]byte, len(data))
@@ -46,7 +47,7 @@ func (w *chanWriter) Write(data []byte) (int, error) {
 	return written, nil
 }
 
-// Proxy runs inkspace instance in background and
+// Proxy runs inkscape instance in background and
 // provides mechanism to interfacing with running
 // instance via stdin
 type Proxy struct {
@@ -144,17 +145,22 @@ wait:
 			}
 
 		case bytesErr := <-stderrC:
+			log.Println("stderr :", bytesErr)
 			if len(bytesErr) == 0 {
 				break
 			}
 
-			if bytes.Contains(bytesErr, []byte("WARNING")) {
-				break
+			// only skip warning when option suppressWarning are true
+			if p.options.suppressWarning {
+				if bytes.Contains(bytesErr, []byte("WARNING")) {
+					break
+				}
 			}
 
 			p.stderr <- bytes.TrimSpace(bytesErr)
 
 		case bytesOut := <-stdoutC:
+			log.Println("stderr :", bytesOut)
 			if len(bytesOut) == 0 {
 				break
 			}
@@ -195,7 +201,7 @@ func (p *Proxy) Run(args ...string) error {
 // Close satisfy io.Closer interface
 func (p *Proxy) Close() error {
 	// send quit command
-	_, err := p.sendCommand([]byte(quitCommand), false)
+	_, err := p.sendCommand(context.Background(), []byte(quitCommand), false)
 
 	p.cancel()
 	close(p.requestLimiter)
@@ -206,7 +212,7 @@ func (p *Proxy) Close() error {
 	return err
 }
 
-func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
+func (p *Proxy) sendCommand(ctx context.Context, b []byte, waitPrompt ...bool) ([]byte, error) {
 	wait := true
 	if len(waitPrompt) > 0 {
 		wait = waitPrompt[0]
@@ -246,17 +252,22 @@ func (p *Proxy) sendCommand(b []byte, waitPrompt ...bool) ([]byte, error) {
 
 waitLoop:
 	for {
+		select {
+		// wait till context canceled, early return
+		case <-ctx.Done():
+			return output, ErrCommandExecCanceled
 		// wait until received prompt
-		bytesOut := <-p.stdout
-		p.debug(string(bytesOut))
-		parts := bytes.Split(bytesOut, []byte("\n"))
-		for _, part := range parts {
-			if isPrompt(part) {
-				break waitLoop
+		case bytesOut := <-p.stdout:
+			p.debug(string(bytesOut))
+			parts := bytes.Split(bytesOut, []byte("\n"))
+			for _, part := range parts {
+				if isPrompt(part) {
+					break waitLoop
+				}
 			}
-		}
 
-		output = append(output, bytesOut...)
+			output = append(output, bytesOut...)
+		}
 	}
 
 	// drain error channel
@@ -278,20 +289,31 @@ errLoop:
 
 // RawCommands send inkscape shell commands
 func (p *Proxy) RawCommands(args ...string) ([]byte, error) {
+	return p.RawCommandsContext(context.Background(), args...)
+}
+
+// RawCommandsContext send inkscape shell commands that are bounded into specific context
+func (p *Proxy) RawCommandsContext(ctx context.Context, args ...string) ([]byte, error) {
 	buffer := bufferPool.Get()
 	defer bufferPool.Put(buffer)
 
 	// construct command buffer
 	buffer.WriteString(strings.Join(args, ";"))
 
-	res, err := p.sendCommand(buffer.Bytes())
+	res, err := p.sendCommand(ctx, buffer.Bytes())
 
 	return res, err
 }
 
 // Svg2Pdf convert svg input file to output pdf file
 func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
-	res, err := p.RawCommands(
+	return p.Svg2PdfContext(context.Background(), svgIn, pdfOut)
+}
+
+// Svg2PdfContext convert svg input file to output pdf file that are bounded into specific context
+func (p *Proxy) Svg2PdfContext(ctx context.Context, svgIn, pdfOut string) error {
+	res, err := p.RawCommandsContext(
+		ctx,
 		FileOpen(svgIn),
 		ExportFileName(pdfOut),
 		ExportDo(),
@@ -310,9 +332,10 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 func NewProxy(opts ...Option) *Proxy {
 	// default value
 	options := Options{
-		commandName: defaultCmdName,
-		maxRetry:    5,
-		verbose:     false,
+		commandName:     defaultCmdName,
+		maxRetry:        5,
+		verbose:         false,
+		suppressWarning: true,
 	}
 
 	// merge options

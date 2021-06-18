@@ -18,6 +18,9 @@ type Options struct {
 
 	// set verbosity
 	verbose bool
+
+	// allow to suppress warning
+	suppressWarning bool
 }
 
 // CommandName customize inkscape executable name
@@ -40,6 +43,13 @@ func MaxRetry(retry int) Option {
 func CommandQueueLength(length int) Option {
 	return func(o *Options) {
 		o.commandQueueLength = length
+	}
+}
+
+// SuppressWarning override default suppress warning option, that are enabled
+func SuppressWarning(suppress bool) Option {
+	return func(o *Options) {
+		o.suppressWarning = suppress
 	}
 }
 
