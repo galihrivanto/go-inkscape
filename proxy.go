@@ -292,7 +292,7 @@ func (p *Proxy) RawCommands(args ...string) ([]byte, error) {
 	return p.RawCommandsContext(context.Background(), args...)
 }
 
-// RawCommands send inkscape shell commands
+// RawCommandsContext send inkscape shell commands that are bounded into specific context
 func (p *Proxy) RawCommandsContext(ctx context.Context, args ...string) ([]byte, error) {
 	buffer := bufferPool.Get()
 	defer bufferPool.Put(buffer)
@@ -310,7 +310,7 @@ func (p *Proxy) Svg2Pdf(svgIn, pdfOut string) error {
 	return p.Svg2PdfContext(context.Background(), svgIn, pdfOut)
 }
 
-// Svg2PdfContext convert svg input file to output pdf file
+// Svg2PdfContext convert svg input file to output pdf file that are bounded into specific context
 func (p *Proxy) Svg2PdfContext(ctx context.Context, svgIn, pdfOut string) error {
 	res, err := p.RawCommandsContext(
 		ctx,
